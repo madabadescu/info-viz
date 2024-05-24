@@ -1,0 +1,176 @@
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(ggspatial)
+library(sf)
+library(stringi)
+
+raw_rezultate <- read_excel('2019-08-06-date-deschise-bac-2019-i.xlsx')
+raw_licee <- read_excel('coduri_sirues.xlsx')
+
+rezultate <- raw_rezultate %>% filter(!is.na(`Unitate (SIRUES)`))
+licee <- raw_licee %>% filter(!is.na(`Cod SIRUES`))
+
+rezultate$`Unitate (SIRUES)` <- as.integer(rezultate$`Unitate (SIRUES)`)
+licee$`Cod SIRUES` <- as.integer(licee$`Cod SIRUES`)
+
+stats_judete <- list()
+unique_judete <- unique(licee$`Judeţ`)
+for (judet in unique_judete) {
+  stats_judete[[judet]] <- c(nepromovati = 0, promovati = 0, promovabilitate = 0)
+}
+
+for (i in 1:nrow(rezultate)) {
+  elev <- rezultate[i, ]
+  cod_sirues <- elev$`Unitate (SIRUES)`
+  liceu <- filter(licee, `Cod SIRUES` == cod_sirues)
+  
+  if (nrow(liceu) > 0) {
+    judet <- liceu$`Judeţ`
+    if (elev$STATUS == 'Promovat') {
+      stats_judete[[judet]]['promovati'] <- stats_judete[[judet]]['promovati'] + 1
+      stats_judete[[judet]]['promovabilitate'] <- stats_judete[[judet]]['promovabilitate'] + elev$Medie
+    } else if (elev$STATUS == 'Nepromovat') {
+      stats_judete[[judet]]['nepromovati'] <- stats_judete[[judet]]['nepromovati'] + 1
+    }
+  }
+}
+
+stats_judete[['Ilfov']] <- stats_judete[['Bucuresti']]
+
+for (judet in names(stats_judete)) {
+  total <- stats_judete[[judet]]['nepromovati'] + stats_judete[[judet]]['promovati']
+  stats_judete[[judet]]['promovabilitate'] <- stats_judete[[judet]]['promovati'] / total
+}
+
+sorted_stats_judete <- stats_judete[order(sapply(names(stats_judete), stri_trans_general, id = "Latin-ASCII"))]
+
+romania <- st_read("./gadm36_ROU.gpkg")
+romania$NAME_1_normalized <- stri_trans_general(str = romania$NAME_1, id = "Latin-ASCII")
+
+
+romania_by_county <- romania %>%
+  group_by(NAME_1_normalized) %>%
+  summarize(geometry = st_union(geom))
+
+promovabilitate <- sapply(sorted_stats_judete, function(x) x['promovabilitate'])
+romania_by_county$numbers <- promovabilitate
+
+ggplot(data = romania_by_county) +
+  geom_sf(aes(fill = numbers)) +
+  scale_fill_gradient(low = "white", high = "green") +
+  theme_minimal()
+
+rural <- c(promovati = 0, total = 0)
+urban <- c(promovati = 0, total = 0)
+
+for (i in 1:nrow(rezultate)) {
+  elev <- rezultate[i, ]
+  if (elev$`Mediu candidat` == 'RURAL') {
+    rural['total'] <- rural['total'] + 1
+    if (elev$STATUS == 'Promovat') {
+      rural['promovati'] <- rural['promovati'] + 1
+    }
+  } else if (elev$`Mediu candidat` == 'URBAN') {
+    urban['total'] <- urban['total'] + 1
+    if (elev$STATUS == 'Promovat') {
+      urban['promovati'] <- urban['promovati'] + 1
+    }
+  }
+}
+
+mediu_df <- data.frame(
+  `Mediu Candidat` = c('Rural', 'Urban'),
+  `Promovabilitate` = c(rural['promovati'] / rural['total'], urban['promovati'] / urban['total'])
+)
+
+ggplot(mediu_df, aes(x = `Mediu.Candidat`, y = `Promovabilitate`)) +
+  geom_bar(stat = 'identity') +
+  theme_minimal()
+
+profile <- unique(rezultate$Profil)
+stats_profile <- setNames(lapply(profile, function(x) c(promovati = 0, total = 0)), profile)
+
+for (i in 1:nrow(rezultate)) {
+  elev <- rezultate[i, ]
+  profil <- elev$Profil
+  stats_profile[[profil]]['total'] <- stats_profile[[profil]]['total'] + 1
+  if (elev$STATUS == 'Promovat') {
+    stats_profile[[profil]]['promovati'] <- stats_profile[[profil]]['promovati'] + 1
+  }
+}
+
+profil_df <- data.frame(
+  `Profil Candidat` = names(stats_profile),
+  `Promovabilitate` = sapply(stats_profile, function(x) x['promovati'] / x['total'])
+)
+
+ggplot(profil_df, aes(x = `Profil.Candidat`, y = `Promovabilitate`)) +
+  geom_bar(stat = 'identity') +
+  theme_minimal()
+
+fi <- unique(rezultate$`Forma de învățământ`)
+stats_fi <- setNames(lapply(fi, function(x) c(promovati = 0, total = 0)), fi)
+
+for (i in 1:nrow(rezultate)) {
+  elev <- rezultate[i, ]
+  forma_inv <- elev$`Forma de învățământ`
+  stats_fi[[forma_inv]]['total'] <- stats_fi[[forma_inv]]['total'] + 1
+  if (elev$STATUS == 'Promovat') {
+    stats_fi[[forma_inv]]['promovati'] <- stats_fi[[forma_inv]]['promovati'] + 1
+  }
+}
+
+fi_df <- data.frame(
+  `Forma de învățământ` = names(stats_fi),
+  `Promovabilitate` = sapply(stats_fi, function(x) x['promovati'] / x['total'])
+)
+
+ggplot(fi_df, aes(x = `Forma.de.învățământ`, y = `Promovabilitate`)) +
+  geom_bar(stat = 'identity') +
+  theme_minimal()
+
+M <- c(promovati = 0, total = 0)
+F <- c(promovati = 0, total = 0)
+
+for (i in 1:nrow(rezultate)) {
+  elev <- rezultate[i, ]
+  if (elev$Sex == 'M') {
+    M['total'] <- M['total'] + 1
+    if (elev$STATUS == 'Promovat') {
+      M['promovati'] <- M['promovati'] + 1
+    }
+  } else if (elev$Sex == 'F') {
+    F['total'] <- F['total'] + 1
+    if (elev$STATUS == 'Promovat') {
+      F['promovati'] <- F['promovati'] + 1
+    }
+  }
+}
+
+sexe_df <- data.frame(
+  `Sex.Candidat` = c('M', 'F'),
+  `Promovabilitate` = c(M['promovati'] / M['total'], F['promovati'] / F['total'])
+)
+
+ggplot(sexe_df, aes(x = `Sex.Candidat`, y = `Promovabilitate`)) +
+  geom_bar(stat = 'identity') +
+  theme_minimal()
+
+
+ppp_df <- read.csv('ro_counties_gdp.csv')
+np_ppp <- as.numeric(ppp_df$PPP)
+np_promp <- as.numeric(promovabilitate)
+
+ggplot(data = data.frame(np_ppp, np_promp), aes(x = np_ppp, y = np_promp)) +
+  geom_point() +
+  labs(x = "PPP", y = "Promovabilitate") +
+  ggtitle("Scatter plot of PPP vs Promovabilitate")
+
+new_np_ppp <- np_ppp[-c(10, 26)]
+new_np_promp <- np_promp[-c(10, 26)]
+
+ggplot(data = data.frame(new_np_ppp, new_np_promp), aes(x = new_np_ppp, y = new_np_promp)) +
+  geom_point() +
+  labs(x = "PPP", y = "Promovabilitate") +
+  ggtitle("Scatter plot of PPP vs Promovabilitate, (outlier removed)")
